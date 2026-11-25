@@ -3,3 +3,7 @@ __pycache__/
 *.pt
 runs/
 venv/
+outputs/
+outputs_*/
+models/
+*.docx
