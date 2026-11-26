@@ -35,10 +35,16 @@ python baseline.py
 ```
 Reads every image in `samples/` and saves annotated images to `outputs/`.
 
+```bash
+python shelf_rows.py
+```
+Filters bad boxes, groups the rest into shelf rows, and saves colored row overlays to `outputs_rows/`.
+
 ## Project Structure
 - `baseline.py` - runs YOLO detection on the sample images and draws boxes
+- `shelf_rows.py` - box size filtering and tilt-corrected shelf row clustering
 - `samples/` - 18 retail shelf test images
-- `examples/` - before/after result images
+- `examples/` - before/after and row overlay result images
 - `requirements.txt` - Python dependencies
 
 ## Day 2 Findings
@@ -69,10 +75,33 @@ Box counts show how many detections appeared, not proven accuracy. Correctness w
 
 **Model note:** the shelf model is the community model `prince4332/yolov26-product-detection` from Hugging Face, not an official release. No model was trained or fine-tuned in this project so far; the sample images are unlabeled and used only for testing.
 
+## Day 3 Findings
+
+`shelf_rows.py` takes the detected boxes and turns them into shelf rows:
+
+1. **Size filter.** Boxes much larger (over 3x) or much smaller (under 0.25x) than the image's median box are removed. Removed boxes are kept as gray "unknown zones", so Day 4 gap detection will not report a gap where a merged box covered real products.
+2. **Row clustering.** Each box's vertical center decides its row. Rows are sorted top to bottom, and boxes left to right.
+3. **Tilt correction.** One shelf slope is estimated per image and subtracted, so angled shelves split into fewer rows.
+
+**Examples (colors = shelf rows, gray = unknown zones):**
+
+![Straight-on shelf](examples/val_231_rows.jpg)
+![Angled shelf](examples/m5tu1_rows_angled.jpg)
+
+**What I observed (visual checks)**
+- The filter removed the false boxes on the red banner and boxes over the ground in `val_231` and `test_411`.
+- The model ignores the `iou` overlap setting, so duplicate removal must be done in my own code (planned for Day 7).
+- Tilt correction improved the angled photo `m5tu1.png` and did not make any checked image worse.
+
+**Known limits**
+- Only one tilt is estimated per image, so photos with strong perspective can still split a shelf into several rows (for example `train_677.jpg`).
+- Overlapping boxes remain in dense areas with many small products.
+- These row results were checked by eye on a few images, not measured against labeled data.
+
 ## Progress
 - [x] Day 1: Repo setup, virtual environment, sample images
 - [x] Day 2: Baseline YOLO detection and model comparison
-- [ ] Day 3: Shelf row clustering
+- [x] Day 3: Box filtering and shelf row clustering
 - [ ] Day 4: Gap detection and JSON output
 - [ ] Day 5: ShelfDetector class and CSV logging
 - [ ] Day 6: Streamlit UI
