@@ -5,10 +5,18 @@ Computer Vision module for the Retail Store Analytics sprint (Nov 24 - Dec 3, 20
 ## Goal
 Detect out-of-stock gaps on retail shelves using object detection and spatial bounding-box analysis.
 
-## Planned Output
+## Output
 ```json
-{"fill_rate_pct": 0.0, "empty_slots": [], "restock_alert": false}
+{
+  "fill_rate_pct": 95.9,
+  "empty_slots": [
+    {"row": 5, "x1": 465, "y1": 1449, "x2": 578, "y2": 1650}
+  ],
+  "restock_alert": false,
+  "uncertain_gaps": 32
+}
 ```
+(Example from `examples/test_2758_gaps.json`, shortened to one slot.) `fill_rate_pct` is `null` when an image has too few detected products to analyze. `uncertain_gaps` counts candidate slots the code rejected.
 
 ## Tech Stack
 - Ultralytics YOLO
@@ -40,11 +48,17 @@ python shelf_rows.py
 ```
 Filters bad boxes, groups the rest into shelf rows, and saves colored row overlays to `outputs_rows/`.
 
+```bash
+python shelf_gaps.py
+```
+Finds empty slots, and saves an annotated image and a JSON file per input image to `outputs_gaps/`. Pass image names (without extension) to also print the details of each decision, for example `python shelf_gaps.py test_1803 test_2758`.
+
 ## Project Structure
 - `baseline.py` - runs YOLO detection on the sample images and draws boxes
 - `shelf_rows.py` - box size filtering and tilt-corrected shelf row clustering
+- `shelf_gaps.py` - gap detection, slot splitting, re-check, JSON metrics, annotated frames
 - `samples/` - 18 retail shelf test images
-- `examples/` - before/after and row overlay result images
+- `examples/` - result images and example JSON
 - `requirements.txt` - Python dependencies
 
 ## Day 2 Findings
@@ -79,7 +93,7 @@ Box counts show how many detections appeared, not proven accuracy. Correctness w
 
 `shelf_rows.py` takes the detected boxes and turns them into shelf rows:
 
-1. **Size filter.** Boxes much larger (over 3x) or much smaller (under 0.25x) than the image's median box are removed. Removed boxes are kept as gray "unknown zones", so Day 4 gap detection will not report a gap where a merged box covered real products.
+1. **Size filter.** Boxes much larger (over 3x) or much smaller (under 0.25x) than the image's median box are removed. Removed boxes are kept as gray "unknown zones", so gap detection does not report a gap where a merged box covered real products.
 2. **Row clustering.** Each box's vertical center decides its row. Rows are sorted top to bottom, and boxes left to right.
 3. **Tilt correction.** One shelf slope is estimated per image and subtracted, so angled shelves split into fewer rows.
 
@@ -91,18 +105,43 @@ Box counts show how many detections appeared, not proven accuracy. Correctness w
 **What I observed (visual checks)**
 - The filter removed the false boxes on the red banner and boxes over the ground in `val_231` and `test_411`.
 - The model ignores the `iou` overlap setting, so duplicate removal must be done in my own code (planned for Day 7).
-- Tilt correction improved the angled photo `m5tu1.png` and did not make any checked image worse.
+- Tilt correction changed row counts by one or less and did not make any checked image worse.
 
 **Known limits**
 - Only one tilt is estimated per image, so photos with strong perspective can still split a shelf into several rows (for example `train_677.jpg`).
 - Overlapping boxes remain in dense areas with many small products.
 - These row results were checked by eye on a few images, not measured against labeled data.
 
+## Day 4 Findings
+
+`shelf_gaps.py` walks each shelf row left to right and looks for empty slots:
+
+1. **Gap rule.** A gap is `next_x1 - prev_x2` between neighboring boxes (using the furthest right edge so far, so nested boxes do not create fake gaps). A gap wider than 1.2x the median product width is a candidate. Rows with fewer than 3 boxes are ignored.
+2. **Slot splitting.** A wide gap is split into product-sized slots, so one red box marks about one product position, not a whole stretch of shelf.
+3. **Rejecting doubtful slots.** A candidate becomes "uncertain" (not empty) if it overlaps a gray unknown zone (`unk`), if over 30% of it is covered by other detected boxes (`cov`), or if re-running the detector on a zoomed crop at confidence 0.10 finds a product centered in it (`chk`).
+4. **Metrics.** `fill_rate_pct = (1 - total empty width / total row width) x 100`. `restock_alert` is true when the fill rate is below 85%.
+
+**Results on the 18 sample images:** 23 slots were reported empty and 172 candidate slots were rejected as uncertain. Fill rates ranged from 88.6% to 100% on the 16 images that could be analyzed; two images (`shelf image.jpg`, `shelf image2.jpg`) had too few boxes. No image triggered a restock alert.
+
+**Examples:** `test_2758` is the best case (red boxes on individual empty slots on the middle shelf). `test_1803` shows a limit (yellow = rejected slots with the rule and re-check confidence).
+
+![test_2758](examples/test_2758_gaps.jpg)
+![test_1803 limit](examples/test_1803_gaps_limit.jpg)
+
+**Quality limits**
+- **Missed detections can appear as false empty slots.** In `test_2758`, one of the four empty slots (lowest row) appears to sit on a real product that the detector missed even at confidence 0.10.
+- **The re-check can wrongly rescue bare shelf.** In `test_1803`, slots in the clear-bin area were rejected as "uncertain" even though they look bare, and one had a re-check confidence of 0.77. A confidence cutoff cannot fix this: `test_2758` has correct rescues at similar weak confidences, so I left the rule unchanged.
+- **Uncertain slots count as stocked, so fill rates lean high.**
+- **The restock alert never fired on the 18 images.** To check that the alert path works, the threshold was temporarily raised to 99% for one run: `restock_alert` became true on `train_439` (fill 97.4%) and stayed false on `val_231` (fill 100%). The file value stayed at 85%.
+- **The 85% restock threshold is an assumption**, not from the sprint document. Change `RESTOCK_THRESHOLD` in `shelf_gaps.py` to adjust it.
+- Clear bins are treated as shelf fixtures, not products. A bin with items inside counts as stocked and an empty bin as a gap. The detector does not know this, so slots in clear-bin areas can be wrong.
+- These results were checked by eye on a few images, not measured against labeled data.
+
 ## Progress
 - [x] Day 1: Repo setup, virtual environment, sample images
 - [x] Day 2: Baseline YOLO detection and model comparison
 - [x] Day 3: Box filtering and shelf row clustering
-- [ ] Day 4: Gap detection and JSON output
+- [x] Day 4: Gap detection and JSON output
 - [ ] Day 5: ShelfDetector class and CSV logging
 - [ ] Day 6: Streamlit UI
 - [ ] Day 7: Tuning and edge cases
